@@ -1,7 +1,7 @@
 /*
-CSC3916 HW3
+CSC3916 HW5
 File: Server.js
-Description: Web API scaffolding for Movie API
+Description: Web API for Movie API
  */
 
 var express = require('express');
