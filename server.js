@@ -1,7 +1,8 @@
 /*
-CSC3916 HW5
+Mustafa Shami
+CSC3916 HW4
 File: Server.js
-Description: Web API for Movie API
+Description: Web API scaffolding for Movie API
  */
 
 var express = require('express');
@@ -13,10 +14,11 @@ var jwt = require('jsonwebtoken');
 var cors = require('cors');
 var User = require('./Users');
 var Movie = require('./Movies');
+var Review = require('./Reviews');
 
 var app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.json()); //makes it for we don't have to do json.parse everytime
 app.use(bodyParser.urlencoded({ extended: false }));
 
 app.use(passport.initialize());
@@ -132,15 +134,52 @@ router.route('/movies')
         {
             if(err) //check if error while getting movies from database
             {
-                return res.json(err);
+                return res.json({success:false, message:'There are no movies'}, err);
             }
             if(movies.length == 0) //check if there are any movies in the database
             {
                 res.status(204).json({success:false , message:'There are no movies in the database.'});
             }
             else if(movies.length >= 1)
-            {   //return the list of movies
-                res.status(200).json({success:true , message:'Here is all the movies in the database.' , movies});
+            {
+                if(req.query.reviews === "true")//check if user wants the reviews with the movie list
+                {
+                    Movie.aggregate([ //pipeline for aggregating reviews with movie object
+                        {
+                            $lookup:
+                                {
+                                    from: "reviews", //mongoDB collection
+                                    localField: "title", //movie schema
+                                    foreignField: "movieTitle", //reviews schema (title is what movie and reviews have in common and it how we combine appropriate review to each movie
+                                    as: "movieReview" //the name of the new aggregated field we are making
+                                }
+                        },
+                        // {
+                        //     $addFields: //new data that will be included in the response (average review of the movie)
+                        //     {
+                        //         avgRating:
+                        //             {$avg: "$movieReview.rating"}
+                        //     }
+                        // }
+                    ])
+                    .sort({avgRating: -1}) //sort -1 (descending order)
+                        .exec(function(err, movieReview) //have to execute the aggregation
+                        {
+                            if(err)
+                            {
+                                return res.json(err);
+                            }
+                            else
+                            {
+                                return res.status(200).json({success:true , message: "Here's the Movies AND their reviews." , movieReview});
+                            }
+                        })
+                }
+                else
+                {
+                    //return the list of movies
+                    res.status(200).json({success:true , message:'Here is all the movies in the database.' , movies});
+                }
             }
         });
     });
@@ -196,8 +235,49 @@ router.route('/movies/*') //routes that require parameter of movie title
                 res.status(204).json({success:false , message:'There is no movie with that title in the database.'});
             }
             else if(movie.length >= 1)
-            {   //return the list of movies
-                res.status(200).json({success:true , message:'Here is information about this movie.' , movie});
+            {
+                if(req.query.reviews === "true")//check if user wants the reviews with the movie list
+                {
+                    Movie.aggregate([ //pipeline for aggregating reviews with movie object
+                        {
+                            //want reviews specific to the title parameter in the request
+                            $match: {title: req.params['0']}
+                        },
+                        {
+                            $lookup:
+                                {
+                                    from: "reviews", //mongoDB collection
+                                    localField: "title", //movie schema
+                                    foreignField: "movieTitle", //reviews schema (title is what movie and reviews have in common and it how we combine appropriate review to each movie
+                                    as: "movieReview" //the name of the new aggregated field we are making
+                                }
+                        },
+                        // {
+                        //     $addFields: //new data that will be included in the response (average review of the movie)
+                        //         {
+                        //             avgRating:
+                        //                 {$avg: "$movieReview.rating"}
+                        //         }
+                        // }
+                    ])
+                        .sort({avgRating: -1}) //sort -1 (descending order)
+                        .exec(function(err, movieReview) //have to execute the aggregation
+                        {
+                            if(err)
+                            {
+                                return res.json(err);
+                            }
+                            else
+                            {
+                                return res.status(200).json({success:true , message: "Here's the Movie AND its reviews." , movieReview});
+                            }
+                        })
+                }
+                else
+                {
+                    //return the list of movies
+                    res.status(200).json({success:true , message:'Here is information about this movie.' , movie});
+                }
             }
         })
     })
@@ -214,6 +294,75 @@ router.route('/movies/*') //routes that require parameter of movie title
                 {
                     res.status(200).json({success:true , message:'Movie Updated!'});
                 }
+        });
+    });
+
+
+router.route("/reviews")
+    //Post new review and store in database
+    .post(authJwtController.isAuthenticated, function(req , res) {
+        if(!req.body.user || !req.body.movieTitle || !req.body.rating || !req.body.review)
+        {
+            return res.status(400).json({success: false, message: 'Not enough info. Remember to include username, movie title, rating, and movie review.'});
+        }
+
+        var newReview = new Review(); //creating new review object
+        newReview.user = req.body.user;
+        newReview.movieTitle = req.body.movieTitle;
+        newReview.rating = req.body.rating;
+        newReview.review = req.body.review;
+
+        Movie.findOne({title: req.body.movieTitle}, function(err, movie)
+        {
+            if(err)
+            {
+                return res.json(err);
+            }
+            if(!movie) //check if the movie the user entered a review for even exists
+            {
+                return res.status(400).json({success:false, message: "Movie is not in the database."});
+            }
+            else
+            {
+                newReview.save(function(err)
+                {
+                    if(err)
+                    {
+                        if(err.code == 11000) //check if duplicate review
+                        {
+                            return res.json({success:false, message: 'Failed to save review. (duplicate review).'});
+                        }
+                        else
+                        {
+                            return res.json(err);
+                        }
+                    }
+                    else
+                    {
+                        return res.status(200).json({success: true, message:'Saved Review!'});
+                    }
+                });
+            }
+        });
+    })
+
+    //get all the reviews from the database
+    .get(authJwtController.isAuthenticated, function(req, res)
+    {
+        Review.find().exec(function(err, reviews) //did not specify constraint for find function so it will return everything in the reviews collection
+        {
+            if(err)
+            {
+                return res.json(err);
+            }
+            if(reviews.length == 0)
+            {
+                return res.status(204).json({success:false, message:'No reviews in stored.'});
+            }
+            else if(reviews.length >= 1)
+            {
+                res.status(200).json({success:true , message:'Here is all the reviews that are stored.' , reviews});
+            }
         });
     });
 
